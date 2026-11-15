@@ -5,6 +5,7 @@ import logging
 import time
 
 from .api import APIError
+from .settings import BotSettings
 
 LOG = logging.getLogger(__name__)
 
@@ -34,8 +35,10 @@ class Reply:
 
 
 class BotCore:
-    def __init__(self, api, model, clock=time.monotonic):
+    def __init__(self, api, model, clock=time.monotonic, settings=None, costs=None):
         self.api, self.model, self.clock = api, model, clock
+        self.settings = settings if settings is not None else BotSettings()
+        self.costs = costs
         self.started = clock()
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='openai')
         self.waiting = deque()
@@ -53,17 +56,55 @@ class BotCore:
         self.generation = 0
         self.closed = False
 
+    @property
+    def channel_replies_enabled(self):
+        return self.settings.channel_replies_enabled
+
     def status(self):
         s = self.stats
         return (
             f'Bot: {self.connection}\nModel: {self.model}\n'
+            f'Channel replies: {"enabled" if self.channel_replies_enabled else "disabled"}\n'
             f'Uptime: {int(self.clock() - self.started)} s\n'
             f'Queue: {len(self.waiting)}, active: {len(self.active)}\n'
             f'Messages: {s["received"]}, answers: {s["answers"]}, errors: {s["errors"]}\n'
             f'API tokens: input {s["input_tokens"]}, output {s["output_tokens"]}\n'
             f'Last API duration: {s["last_seconds"]:.1f} s\n'
-            f'Last error: {self.last_error}\nHistory: RAM only, 30 min idle timeout'
+            f'Last error: {self.last_error}\nHistory: RAM only, 30 min idle timeout\n'
+            + (self.costs.status() if self.costs is not None else
+               'OpenAI reported costs: unavailable (OPENAI_ADMIN_KEY not configured)')
         )
+
+    def channel_command(self, msg, words):
+        if not msg.admin:
+            response = 'Komenda /channel jest dostępna tylko dla administratorów serwera.'
+        elif not msg.private:
+            response = 'Wyślij /channel on lub /channel off w wiadomości prywatnej do bota.'
+        elif words[1:] in ([], ['status']):
+            state = 'włączone' if self.channel_replies_enabled else 'wyłączone'
+            response = f'Odpowiedzi na kanale: {state}. Zmiana: /channel on albo /channel off.'
+        elif words[1:] not in (['on'], ['off']):
+            response = 'Użycie: /channel on, /channel off lub /channel status.'
+        else:
+            enabled = words[1] == 'on'
+            try:
+                self.settings.set_channel_replies(enabled)
+            except OSError:
+                self.last_error = 'settings_save_failed'
+                LOG.error('settings_save_failed')
+                response = 'Nie udało się zapisać ustawienia. Sprawdź logi; tryb nie został zmieniony.'
+            else:
+                if not enabled:
+                    self.waiting = deque(m for m in self.waiting if m.private)
+                    self.reply_queue = deque((r for r in self.reply_queue if r.private), maxlen=64)
+                    for future, (original, _) in list(self.active.items()):
+                        if not original.private:
+                            future.cancel()
+                            self.active[future] = (original, None)
+                state = 'włączone' if enabled else 'wyłączone'
+                response = f'Odpowiedzi na kanale {state}. Ustawienie zapisane. Wiadomości prywatne nadal działają.'
+                LOG.info('channel_replies_changed enabled=%s user_id=%d', enabled, msg.user_id)
+        self.reply_queue.append(Reply(msg, response, True))
 
     def receive(self, msg):
         if self.closed or msg.generation != self.generation:
@@ -81,6 +122,12 @@ class BotCore:
             if len(commands) >= 10:
                 return
             commands.append(now)
+        words = text.lower().split()
+        if words[0] == '/channel':
+            self.channel_command(msg, words)
+            return
+        if not msg.private and not self.channel_replies_enabled:
+            return
         if text.lower() == '/status':
             self.reply_queue.append(Reply(msg, self.status() if msg.admin else
                 'Komenda /status jest dostępna tylko dla administratorów serwera.', True))
@@ -89,7 +136,8 @@ class BotCore:
             self.reply_queue.append(Reply(msg,
                 'Napisz do mnie prywatnie albo na kanale, na którym jestem. '
                 'Odpowiadam przez API OpenAI. /reset usuwa kontekst tej rozmowy. '
-                '/status jest dla administratorów. Wiadomości kanału są publiczne.', True))
+                '/status jest dla administratorów. Administrator może na PW użyć '
+                '/channel on lub /channel off. Wiadomości kanału są publiczne.', True))
             return
         if text.lower() == '/reset':
             # Invalidate in-flight results for this conversation by removing its history.
@@ -102,7 +150,7 @@ class BotCore:
             self.reply_queue.append(Reply(msg, 'Kontekst tej rozmowy został usunięty.', True))
             return
         if text.startswith('/'):
-            self.reply_queue.append(Reply(msg, 'Nieznana komenda. Dostępne: /help, /reset, /status.', True))
+            self.reply_queue.append(Reply(msg, 'Nieznana komenda. Dostępne: /help, /reset, /status, /channel.', True))
             return
         if len(text) > 8000:
             self.reply_queue.append(Reply(msg, 'Skróć wiadomość do 8000 znaków.', True))
@@ -151,6 +199,8 @@ class BotCore:
             busy.add(msg.key)
 
     def poll(self):
+        if self.costs is not None:
+            self.costs.poll()
         for future, (msg, messages) in list(self.active.items()):
             if not future.done():
                 continue
@@ -208,3 +258,5 @@ class BotCore:
         self.closed = True
         self.disconnected()
         self.pool.shutdown(wait=True, cancel_futures=True)
+        if self.costs is not None:
+            self.costs.close()

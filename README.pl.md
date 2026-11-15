@@ -19,6 +19,8 @@ usługę systemd, ograniczoną kolejkę zapytań, rotację logów i prywatny sta
 - Osobny kontekst dla każdego użytkownika oraz dla rozmów prywatnych i kanałowych.
 - Odpowiedzi w języku wiadomości, w prostym tekście odpowiednim dla czytników ekranu.
 - `/status` tylko dla administratorów serwera TeamTalk; wynik zawsze prywatnie.
+- `/channel on`, `/channel off` i `/channel status` dla administratorów w wiadomościach prywatnych.
+- Opcjonalny rzeczywisty koszt miesięczny w USD z OpenAI Costs API, widoczny w statusie administratora.
 - `/reset` do usunięcia kontekstu rozmowy oraz `/help` z krótką pomocą.
 - Dzielenie i składanie wiadomości UTF-8, również z polskimi znakami i emoji.
 - Dwa równoległe zapytania do API, zachowanie kolejności w obrębie rozmowy i limity częstotliwości.
@@ -27,7 +29,8 @@ usługę systemd, ograniczoną kolejkę zapytań, rotację logów i prywatny sta
 - Wyłącznie standardowa biblioteka Pythona; bot i testy nie wymagają pakietów pip.
 
 Bot obsługuje tekst. Nie słucha dźwięku, nie mówi, nie przegląda internetu i nie wykonuje poleceń
-systemowych. Odpowiada na **wszystkie wiadomości w swoim aktualnym kanale**, bez wymogu wzmianki.
+systemowych. Przy włączonych odpowiedziach kanałowych (domyślnie) odpowiada na
+**wszystkie wiadomości w swoim aktualnym kanale**, bez wymogu wzmianki.
 Nie obserwuje jednocześnie wszystkich kanałów serwera. Lokalne komunikaty pomocy i błędów są
 obecnie po polsku, odpowiedzi modelu zależą od języka użytkownika, a raport `/status` jest po angielsku.
 
@@ -105,6 +108,8 @@ Plik zawiera dosłowne wiersze `KLUCZ=wartość`; nie wykonuje poleceń powłoki
 | --- | --- | --- |
 | `OPENAI_API_KEY` | Własny klucz API OpenAI | Wymagana |
 | `OPENAI_MODEL` | Model Responses API | `gpt-6-luna` |
+| `OPENAI_ADMIN_KEY` | Opcjonalny klucz Admin API do rzeczywistych kosztów miesięcznych | Pusta; rozmowy działają bez niego |
+| `OPENAI_COST_PROJECT_ID` | Opcjonalny filtr projektu dla Costs API | Pusta = cała organizacja |
 | `TT_HOST` | Domena serwera TeamTalk | `teamtalk.example.com` |
 | `TT_TCP_PORT` | Port TCP TeamTalk | `10333` |
 | `TT_UDP_PORT` | Port UDP TeamTalk | `10333` |
@@ -129,11 +134,36 @@ ponownego połączenia lub restartu; wtedy wraca do `TT_CHANNEL`.
 | --- | --- | --- |
 | `/help` | Każdy | Prywatna wiadomość z krótką pomocą. |
 | `/reset` | Każdy | Usuwa kontekst rozmowy, w której jej użyto, oraz odrzuca oczekujące i przetwarzane dla niej wyniki. Potwierdzenie jest prywatne. |
-| `/status` | Administratorzy serwera | Stan połączenia, model, czas działania, kolejka, liczba odpowiedzi i błędów, liczniki tokenów API, czas ostatniej odpowiedzi oraz ostatni błąd. Zawsze prywatnie. |
+| `/status` | Administratorzy serwera | Stan połączenia, tryb odpowiedzi kanałowych, model, czas działania, kolejki, liczniki, ostatni błąd i opcjonalnie rzeczywiste zgłoszone koszty w USD. Zawsze prywatnie. |
+| `/channel off` | Administratorzy serwera, tylko na PW | Wyłącza odpowiedzi kanałowe, usuwa oczekujące zapytania/odpowiedzi kanałowe i odrzuca wyniki już przetwarzanych zapytań. Wiadomości prywatne nadal działają. |
+| `/channel on` | Administratorzy serwera, tylko na PW | Ponownie włącza odpowiedzi kanałowe. |
+| `/channel status` | Administratorzy serwera, tylko na PW | Pokazuje aktualny tryb odpowiedzi kanałowych. Samo `/channel` również pokazuje tę informację. |
 
 Uprawnienia są odczytywane z flagi `USERTYPE_ADMIN` w SDK, a nie z pseudonimu
 lub deklaracji użytkownika. Sam operator kanału nie jest administratorem serwera.
-Liczniki tokenów dotyczą bieżącego procesu bota; nie są raportem rozliczeniowym konta.
+Liczniki tokenów dotyczą bieżącego procesu bota. Tryb odpowiedzi kanałowych jest zapisywany
+atomowo w `BOT_DATA_DIR/settings.json` i pozostaje po ponownym połączeniu, restarcie procesu i serwera.
+Komenda sterująca wysłana publicznie nie zmienia ustawienia. Zapytanie już wysłane do OpenAI
+może zostać naliczone po wyłączeniu kanału; jego odpowiedź nie zostanie wysłana na kanał.
+
+### Rzeczywisty koszt USD w `/status`
+
+Dodaj `OPENAI_ADMIN_KEY` do prywatnego pliku konfiguracji, aby włączyć odczyt
+z [OpenAI Costs API](https://platform.openai.com/docs/api-reference/usage/costs).
+Status administratora pokazuje **koszt zgłoszony dla organizacji od początku bieżącego
+miesiąca kalendarzowego w UTC**. To kwota z API rozliczeń, a nie szacunek na podstawie cen tokenów.
+Domyślnie obejmuje wszystkie projekty i aplikacje organizacji, nie tylko tego bota.
+`OPENAI_COST_PROJECT_ID` pozwala ograniczyć raport do jednego projektu; obejmuje on wtedy
+także inne aplikacje działające w tym projekcie.
+
+Raport jest pobierany w osobnym wątku przy starcie, a następnie odświeżany przy komendach statusu
+z pięciominutową pamięcią podręczną. Błąd rozliczeń lub sieci nie blokuje TeamTalk ani rozmów.
+Raport podaje czas pobrania, a dane OpenAI mogą być opóźnione. Pusty raport oznacza, że dla
+wybranego okresu nie zgłoszono jeszcze kosztów. Nieudane odświeżenie oznacza zachowany raport jako nieaktualny.
+
+Costs API **nie podaje pozostałego salda przedpłaconych środków**. Bot pokazuje brak dostępu
+do tej wartości i nie zgaduje salda. Zwykłe rozmowy nie wymagają klucza Admin API.
+Klucz pozostaje poza historią rozmów, logami i repozytorium Git.
 
 ## Instalacja jako usługa systemd
 
@@ -181,6 +211,7 @@ Inne awarie procesu powodują restart, a chwilowe zerwanie połączenia TeamTalk
   ale nie treść wiadomości, klucze API, hasła ani klucze rejestracyjne SDK.
   Pliki mają do 2 MB i pięć kopii zapasowych.
 - `status.json` jest odświeżany mniej więcej co 10 sekund i zawiera dane o działaniu bota.
+  Przy włączonych rozliczeniach zawiera również zapamiętany raport kosztów; chroń katalog danych.
 - Limity API: 8000 znaków na pytanie, 10 pytań na minutę na użytkownika,
   30 pytań na minutę łącznie, dwa równoległe zapytania i do 24 oczekujących/przetwarzanych zapytań.
 - Komendy mają osobny limit 10/min na użytkownika. Ponowienia API są ograniczone;
@@ -210,7 +241,7 @@ python3 -m compileall -q tt_gpt tools tests
 python3 tools/check_public_files.py
 ```
 
-Testy korzystają z atrap odpowiedzi API i obiektów SDK, więc nie wymagają kluczy,
+43 testy korzystają z atrap odpowiedzi API i obiektów SDK, więc nie wymagają kluczy,
 biblioteki natywnej ani działającego serwera. GitHub Actions uruchamia je na Linux
 i Windows z Pythonem 3.12 oraz 3.13. Sprawdza również śledzone pliki pod kątem
 typowych wzorców kluczy i prywatnych ścieżek. Ten skan pomaga wyłapać pomyłki,

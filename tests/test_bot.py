@@ -174,7 +174,8 @@ class TransportTests(unittest.TestCase):
     def setUp(self):
         self.bot = object.__new__(TeamTalkBot)
         self.bot.authenticated = True
-        self.bot.core = SimpleNamespace(generation=0, receive=lambda m: self.received.append(m))
+        self.bot.core = SimpleNamespace(generation=0, channel_replies_enabled=True,
+                                        receive=lambda m: self.received.append(m))
         self.received = []
         self.bot.fragments = {}
         self.bot.client = SimpleNamespace(getMyUserID=lambda: 50, getMyChannelID=lambda: 7,
@@ -221,6 +222,11 @@ class TransportTests(unittest.TestCase):
         self.bot.core.generation = 0
         self.bot.client.getUser = lambda _: SimpleNamespace(nUserID=1, szUsername=b'bob')
         self.assertFalse(self.bot.valid_recipient(reply))
+
+    def test_disabled_channel_rejects_public_output_but_allows_private_output(self):
+        self.bot.core.channel_replies_enabled = False
+        self.assertFalse(self.bot.valid_recipient(Reply(msg(private=False), 'public', False)))
+        self.assertTrue(self.bot.valid_recipient(Reply(msg(), 'private', True)))
 
     def test_admin_permission_comes_from_sdk_not_message_content(self):
         self.bot.receive(self.packet(b'/status'))

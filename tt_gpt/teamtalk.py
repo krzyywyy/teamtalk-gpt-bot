@@ -186,10 +186,13 @@ class TeamTalkBot:
         user = self.client.getUser(msg.user_id)
         if user.nUserID != msg.user_id or tstr(user.szUsername) != msg.username:
             return False
-        return reply.private or (self.client.getMyChannelID() == msg.channel_id and
+        return reply.private or (self.core.channel_replies_enabled and
+                                 self.client.getMyChannelID() == msg.channel_id and
                                  user.nChannelID == msg.channel_id)
 
     def queue_replies(self):
+        if not self.core.channel_replies_enabled:
+            self.outbound = deque((reply, chunk) for reply, chunk in self.outbound if reply.private)
         for reply in self.core.poll():
             if not self.valid_recipient(reply):
                 continue
@@ -223,6 +226,8 @@ class TeamTalkBot:
                     uptime_seconds=int(self.core.clock() - self.core.started),
                     queued=len(self.core.waiting), active=len(self.core.active),
                     last_error=self.core.last_error, updated_at=int(time.time()))
+        data['channel_replies_enabled'] = self.core.channel_replies_enabled
+        data['openai_costs'] = self.core.costs.snapshot() if self.core.costs is not None else {'available': False}
         if self.authenticated:
             user = self.client.getUser(self.client.getMyUserID())
             account = self.client.getMyUserAccount()

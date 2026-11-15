@@ -6,9 +6,11 @@ import sys
 import threading
 
 from .api import APIError, OpenAIClient
+from .billing import CostsClient, CostsMonitor
 from .config import Config, load_env
 from .core import BotCore
 from .teamtalk import TeamTalkBot, sdk, tstr
+from .settings import BotSettings
 
 
 def main():
@@ -35,7 +37,9 @@ def main():
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
-    core = BotCore(api, config.model)
+    settings = BotSettings(config.data_dir / 'settings.json')
+    costs = CostsMonitor(CostsClient(config.admin_key, config.cost_project_id)) if config.admin_key else None
+    core = BotCore(api, config.model, settings=settings, costs=costs)
     try:
         TeamTalkBot(config, core, stop).run()
     finally:

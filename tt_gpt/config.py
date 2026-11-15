@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import os
 
@@ -16,12 +16,12 @@ def load_env(path):
 
 @dataclass(frozen=True)
 class Config:
-    api_key: str
-    license_name: str
-    license_key: str
-    username: str
-    password: str
-    fallback_password: str = ''
+    api_key: str = field(repr=False)
+    license_name: str = field(repr=False)
+    license_key: str = field(repr=False)
+    username: str = field(repr=False)
+    password: str = field(repr=False)
+    fallback_password: str = field(default='', repr=False)
     model: str = 'gpt-6-luna'
     host: str = 'teamtalk.example.com'
     tcp_port: int = 10333
@@ -32,6 +32,8 @@ class Config:
     channel_password: str = ''
     encrypted: bool = False
     data_dir: Path = Path('data')
+    admin_key: str = field(default='', repr=False)
+    cost_project_id: str = field(default='', repr=False)
 
     @classmethod
     def from_env(cls):
@@ -57,4 +59,6 @@ class Config:
             channel_password=os.environ.get('TT_CHANNEL_PASSWORD', ''),
             encrypted=os.environ.get('TT_ENCRYPTED', 'false').lower() == 'true',
             data_dir=Path(os.environ.get('BOT_DATA_DIR', 'data')),
+            admin_key=os.environ.get('OPENAI_ADMIN_KEY', ''),
+            cost_project_id=os.environ.get('OPENAI_COST_PROJECT_ID', ''),
         )

@@ -19,6 +19,8 @@ queues, rotating logs, and a private administrator status command.
 - Separate conversation context for each user and for private versus channel messages.
 - Replies in the language of the incoming message, with plain text suitable for screen readers.
 - `/status` restricted to TeamTalk server administrators, always answered privately.
+- `/channel on`, `/channel off`, and `/channel status` for administrators over private messages.
+- Optional actual monthly USD spend from the OpenAI Costs API, shown only in admin status replies.
 - `/reset` to clear the current conversation and `/help` for a short guide.
 - UTF-8 message fragmentation and reassembly, including Polish text and emoji.
 - Two concurrent API requests, sequential requests within each conversation, and rate limits.
@@ -27,7 +29,7 @@ queues, rotating logs, and a private administrator status command.
 - Python standard library only; no pip dependencies for the bot or its unit tests.
 
 The bot handles text. It does not listen to audio, speak, browse the web, or run shell commands.
-It answers **all messages in its current channel**, without requiring a mention.
+When channel replies are enabled (the default), it answers **all messages in its current channel**, without requiring a mention.
 It does not monitor every channel on the server. Local help/error notices are currently in Polish;
 model replies follow the user's language, and the administrator status report is in English.
 
@@ -104,6 +106,8 @@ The file uses literal `KEY=value` lines, not executable shell syntax.
 | --- | --- | --- |
 | `OPENAI_API_KEY` | Your OpenAI API key | Required |
 | `OPENAI_MODEL` | Responses API model | `gpt-6-luna` |
+| `OPENAI_ADMIN_KEY` | Optional Admin API key for actual reported monthly costs | Empty; chat still works without it |
+| `OPENAI_COST_PROJECT_ID` | Optional project filter for the Costs API | Empty = whole organization |
 | `TT_HOST` | TeamTalk server hostname | `teamtalk.example.com` |
 | `TT_TCP_PORT` | TeamTalk TCP port | `10333` |
 | `TT_UDP_PORT` | TeamTalk UDP port | `10333` |
@@ -128,11 +132,35 @@ or restart, when it returns to `TT_CHANNEL`.
 | --- | --- | --- |
 | `/help` | Anyone | Sends a short private guide. |
 | `/reset` | Anyone | Clears the context of the conversation where it was issued and discards pending/in-flight results for it. Confirmation is private. |
-| `/status` | Server administrators | Sends connection state, model, uptime, queue size, reply/error counts, API token counters, last API duration, and the latest error. Always private. |
+| `/status` | Server administrators | Sends connection state, channel reply mode, model, uptime, queues, counters, latest error, and optional actual reported USD costs. Always private. |
+| `/channel off` | Server administrators, private messages only | Disables channel replies, drops queued channel requests/replies, and suppresses in-flight channel results. Private conversations stay active. |
+| `/channel on` | Server administrators, private messages only | Enables channel replies again. |
+| `/channel status` | Server administrators, private messages only | Reports the current channel reply mode. `/channel` alone also shows this information. |
 
 Administrator access is checked using the SDK's `USERTYPE_ADMIN` flag, not a nickname
 or text supplied by a user. A channel operator alone does not qualify.
-Token counters cover the current bot process; they are not an account billing report.
+Token counters cover the current bot process. Channel reply settings are saved atomically in
+`BOT_DATA_DIR/settings.json` and survive reconnects and process/server restarts.
+A channel command sent publicly does not change the setting. An API request already sent to
+OpenAI may still incur a charge after channel replies are disabled; its result is suppressed.
+
+### Actual USD spend in `/status`
+
+Set `OPENAI_ADMIN_KEY` in the private environment file to enable the read-only
+[OpenAI Costs API](https://platform.openai.com/docs/api-reference/usage/costs).
+The administrator status reply shows **reported organization spend for the current calendar month
+in UTC**. This is an API billing figure, not an estimate based on token prices.
+By default it includes all projects and applications in the organization, not only this bot.
+Use `OPENAI_COST_PROJECT_ID` to filter to one project if needed; that still includes other apps in that project.
+
+The report is fetched in a separate worker at startup and refreshed on status requests with a
+five-minute cache. Billing/network errors do not block TeamTalk or chat replies. The report includes
+its fetch time, and OpenAI's reporting may lag recent requests. An empty report means no costs
+have been reported for the selected period yet. Failed refreshes mark a retained report as stale.
+
+The Costs API does **not** provide the remaining prepaid credit balance. The bot labels that balance
+as unavailable and does not invent a value. No Admin API key is needed for normal conversations.
+The key stays outside conversation history, log output, and the Git repository.
 
 ## Install as a systemd service
 
@@ -179,6 +207,7 @@ Other process failures are restarted, and temporary TeamTalk connection loss is 
 - Logs include operational events and numeric user/channel identifiers, but no message text,
   API keys, passwords, or SDK registration keys. Files rotate at 2 MB with five backups.
 - `status.json` is updated about every 10 seconds and contains operational metadata.
+  If billing is configured, it also contains the cached cost report; protect the runtime directory.
 - API limits: 8,000 characters per question, 10 questions/minute per user, 30 questions/minute
   overall, two simultaneous API requests, and at most 24 queued/active requests.
 - Commands have a separate limit of 10/minute per user. API retries are bounded; quota errors
@@ -208,7 +237,7 @@ python3 -m compileall -q tt_gpt tools tests
 python3 tools/check_public_files.py
 ```
 
-The unit tests use fake API responses and SDK objects, so they require no credentials,
+The 43 unit tests use fake API responses and SDK objects, so they require no credentials,
 native SDK, or running server. GitHub Actions runs them on Linux and Windows with Python
 3.12 and 3.13, and checks tracked files for common credential patterns and private paths.
 The public-file check is a useful guard, not a substitute for reviewing changes before publishing.
