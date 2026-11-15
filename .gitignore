@@ -1,0 +1,34 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+.secrets/
+local/
+*.pem
+*.key
+
+# Third-party SDK files are installed locally, not redistributed
+vendor/*
+!vendor/README.md
+
+# Runtime output and development files
+data/
+logs/
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.tools/
+.idea/
+.vscode/
+*.zip
+*.7z
+*.tgz

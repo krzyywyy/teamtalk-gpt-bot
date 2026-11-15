@@ -1,0 +1,41 @@
+[Unit]
+Description=TeamTalk GPT text bot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=tt-gpt
+Group=tt-gpt
+WorkingDirectory=/opt/teamtalk-gpt-bot
+EnvironmentFile=/etc/teamtalk-gpt-bot/bot.env
+Environment=PYTHONUNBUFFERED=1
+Environment=BOT_DATA_DIR=/var/lib/teamtalk-gpt-bot
+Environment=LD_LIBRARY_PATH=/opt/teamtalk-gpt-bot/vendor
+Environment=ALSA_CONFIG_PATH=/opt/teamtalk-gpt-bot/deploy/asound.conf
+Environment=XDG_CONFIG_HOME=/var/lib/teamtalk-gpt-bot/config
+Environment=PULSE_SERVER=unix:/nonexistent
+ExecStart=/usr/bin/python3 -m tt_gpt
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=78
+TimeoutStopSec=120
+StateDirectory=teamtalk-gpt-bot
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/teamtalk-gpt-bot
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
